@@ -57,7 +57,26 @@
     z-index: 100;
     backdrop-filter: blur(2px);
   }
+  .music-toggle{
+    position: fixed;
+    top: 10px;
+    right: 52px;
+    width: 34px;
+    height: 34px;
+    border-radius: 50%;
+    background: rgba(0,0,0,0.55);
+    border: 1px solid rgba(217,164,65,0.4);
+    color: var(--chalk);
+    font-size: 15px;
+    display:flex;
+    align-items:center;
+    justify-content:center;
+    cursor:pointer;
+    z-index: 100;
+    backdrop-filter: blur(2px);
+  }
   .sound-toggle:active{ transform: scale(0.92); }
+  .music-toggle:active{ transform: scale(0.92); }
   .wall-strip{
     background: linear-gradient(180deg, var(--wall) 0%, var(--wall-dark) 100%);
     padding: 18px 20px 22px;
@@ -206,6 +225,56 @@
     color: rgba(242,236,220,0.75);
   }
   .rules b{ color: var(--turmeric); }
+  .points-balance{
+    font-family:'Baloo 2', sans-serif;
+    font-weight:800;
+    font-size: 26px;
+    color: var(--chalk);
+  }
+  .bet-teams{
+    display:flex;
+    gap: 10px;
+    margin: 10px 0;
+  }
+  .bet-team-btn{
+    flex:1;
+    background: rgba(242,236,220,0.06);
+    border: 2px solid var(--line);
+    border-radius: 12px;
+    padding: 12px 8px;
+    color: var(--chalk);
+    font-family:'Baloo 2', sans-serif;
+    font-weight:700;
+    font-size: 13px;
+    cursor:pointer;
+    text-align:center;
+  }
+  .bet-team-btn.selected{
+    border-color: var(--turmeric);
+    background: rgba(217,164,65,0.15);
+    color: var(--turmeric);
+  }
+  .bet-amount-row{
+    display:flex;
+    align-items:center;
+    gap: 10px;
+    margin: 12px 0;
+  }
+  .bet-amount-row input[type=range]{ flex:1; }
+  .bet-amount-value{
+    font-family:'Baloo 2', sans-serif;
+    font-weight:700;
+    font-size: 18px;
+    color: var(--turmeric);
+    min-width: 46px;
+    text-align:right;
+  }
+  .bet-result-card{
+    text-align:center;
+    padding: 14px;
+  }
+  .bet-result-card.win{ color: #7bd88f; }
+  .bet-result-card.lose{ color: var(--ball-red-bright); }
 
   /* SCOREBOARD */
   .scoreboard{
@@ -580,7 +649,7 @@
   table{ width:100%; border-collapse:collapse; font-size:13px; }
   th{ text-align:left; font-weight:500; color: var(--turmeric); font-size:11px; text-transform:uppercase; letter-spacing:0.5px; padding-bottom:6px;}
   td{ padding: 5px 0; border-top: 1px solid var(--line); }
-  td.num{ text-align:right; }
+  .num{ text-align:right; }
   .out-tag{ color: rgba(242,236,220,0.45); font-size:11px; }
   .not-out{ color:#7bd88f; }
 
@@ -634,6 +703,7 @@
 </head>
 <body>
 <div id="app"></div>
+<audio id="bgMusic" src="music.mp3" loop preload="none"></audio>
 
 <script>
 // ---------- STANDALONE STORAGE FALLBACK ----------
@@ -858,6 +928,112 @@ function ensureSoundToggle(){
     if(soundOn) sfxClick();
   };
   document.body.appendChild(btn);
+}
+
+// ---------- BACKGROUND MUSIC ----------
+let musicOn = true;
+async function loadMusicPref(){
+  if(!storageAvailable()) return;
+  try{
+    const r = await window.storage.get('gully:musicOn');
+    if(r && r.value != null) musicOn = r.value === 'true';
+  }catch(e){ /* default: music on */ }
+}
+async function saveMusicPref(){
+  if(!storageAvailable()) return;
+  try{ await window.storage.set('gully:musicOn', String(musicOn)); }
+  catch(e){ /* non-fatal */ }
+}
+function ensureMusicToggle(){
+  if(document.getElementById('musicToggleBtn')) return;
+  const audio = document.getElementById('bgMusic');
+  audio.volume = 0.35;
+  const btn = document.createElement('button');
+  btn.id = 'musicToggleBtn';
+  btn.className = 'music-toggle';
+  btn.textContent = '🎵';
+  btn.onclick = ()=>{
+    musicOn = !musicOn;
+    btn.textContent = musicOn ? '🎵' : '🎵̶';
+    btn.style.opacity = musicOn ? '1' : '0.45';
+    saveMusicPref();
+    if(musicOn){ audio.play().catch(()=>{}); } else { audio.pause(); }
+  };
+  document.body.appendChild(btn);
+  // browsers block autoplay until a real user gesture - start music on the
+  // first tap anywhere, then never again
+  const startOnFirstTap = ()=>{
+    if(musicOn) audio.play().catch(()=>{});
+    document.removeEventListener('click', startOnFirstTap);
+  };
+  document.addEventListener('click', startOnFirstTap);
+}
+
+// ---------- POINTS & BETTING (in-game currency only - no real-money value, no cashout) ----------
+const STARTING_POINTS = 200;
+const MIN_BET = 10;
+const MAX_BET = 100;
+const MILESTONE_POINTS = 1000;
+const STREAK_BONUS = [10, 15, 25, 40, 60, 90, 150]; // day 1..7, restarts after day 7
+
+async function getPoints(){
+  if(!storageAvailable()) return STARTING_POINTS;
+  try{
+    const r = await window.storage.get('gully:points');
+    if(r && r.value != null) return parseInt(r.value, 10) || 0;
+  }catch(e){ /* not set yet */ }
+  try{ await window.storage.set('gully:points', String(STARTING_POINTS)); }catch(e){}
+  return STARTING_POINTS;
+}
+async function setPoints(n){
+  const clamped = Math.max(0, Math.round(n));
+  if(!storageAvailable()) return clamped;
+  try{ await window.storage.set('gully:points', String(clamped)); }catch(e){}
+  return clamped;
+}
+async function addPoints(n){
+  const current = await getPoints();
+  return setPoints(current + n);
+}
+
+function todayStr(){ return new Date().toISOString().slice(0,10); }
+function yesterdayStr(){ return new Date(Date.now() - 86400000).toISOString().slice(0,10); }
+
+// Runs once per day on first load. Returns {day, bonus} if a new bonus was
+// just credited, or null if today's bonus was already claimed (or storage
+// is unavailable). Missing a day resets the streak back to day 1.
+async function processLoginStreak(){
+  if(!storageAvailable()) return null;
+  let streak = { streakDay: 0, lastLoginDateStr: null };
+  try{
+    const r = await window.storage.get('gully:loginStreak');
+    if(r && r.value) streak = JSON.parse(r.value);
+  }catch(e){ /* first ever login */ }
+
+  const today = todayStr();
+  if(streak.lastLoginDateStr === today) return null; // already claimed today
+
+  const newDay = (streak.lastLoginDateStr === yesterdayStr())
+    ? (streak.streakDay % 7) + 1   // consecutive day -> advance, wrap 7->1
+    : 1;                            // missed a day (or first time) -> restart
+
+  const bonus = STREAK_BONUS[newDay - 1];
+  try{
+    await window.storage.set('gully:loginStreak', JSON.stringify({ streakDay: newDay, lastLoginDateStr: today }));
+  }catch(e){ /* non-fatal */ }
+  await addPoints(bonus);
+  return { day: newDay, bonus };
+}
+
+// A bet is placed once per match, on the toss screen, before innings 1.
+// Stake is deducted immediately; a correct pick pays back double the stake
+// (stake + equal winnings). Nothing here is ever redeemable for real money.
+async function placeBet(teamKey, amount){
+  const points = await getPoints();
+  const stake = Math.max(MIN_BET, Math.min(MAX_BET, Math.round(amount), points));
+  if(stake < MIN_BET || stake > points) return null;
+  await setPoints(points - stake);
+  return { teamKey, stake };
 }
 
 // ---------- GAME DATA / RULES (mirrors the original probability model) ----------
@@ -1168,6 +1344,7 @@ function el(html){
 }
 
 function renderTitle(){
+  app.innerHTML = '';
   const wrap = el(`
     <div>
       <img class="banner-img" src="${AVATARS._banner}" alt="Gully Cricket">
@@ -1177,6 +1354,9 @@ function renderTitle(){
         <div class="sub">tape ball · 4-a-side · 4 overs a side</div>
       </div>
       <main>
+        <div class="card center" id="pointsCard">
+          <div class="sub">Loading your points...</div>
+        </div>
         <div class="card rules">
           <div class="section-label">House Rules</div>
           <div><b>The lane:</b> batter stands at the chair (yes, an actual plastic chair for a wicket) between Buildings A & B, bowler operates up near C & D, where the wall by Building D marks the official boundary.</div>
@@ -1188,7 +1368,7 @@ function renderTitle(){
         <button class="btn btn-secondary" id="squadBtn">Edit your squad 📋</button>
         <button class="btn btn-secondary" id="leaderboardBtn">Gully leaderboard 🏆</button>
       </main>
-      <footer>made for the gully · not for sale</footer>
+      <footer>made for the gully · not for sale · points have no cash value</footer>
     </div>
   `);
   app.appendChild(wrap);
@@ -1200,6 +1380,36 @@ function renderTitle(){
   };
   document.getElementById('squadBtn').onclick = ()=>{ state.screen='squad'; render(); };
   document.getElementById('leaderboardBtn').onclick = ()=>{ state.screen='leaderboard'; render(); };
+
+  (async ()=>{
+    const streakResult = await processLoginStreak();
+    const points = await getPoints();
+    const pointsCard = document.getElementById('pointsCard');
+    if(pointsCard){
+      pointsCard.innerHTML = `
+        <div class="points-balance">💰 ${points} <span style="font-size:13px; opacity:0.7; font-family:'Rubik';">points</span></div>
+        <div class="sub" style="font-size:11px;">in-game currency only · no cash value</div>
+        ${points >= MILESTONE_POINTS ? `<div class="sub" style="color:var(--turmeric); margin-top:4px;">🎉 Crossed ${MILESTONE_POINTS} points — gully legend status!</div>` : ''}
+      `;
+    }
+    if(streakResult) showStreakPopup(streakResult.day, streakResult.bonus);
+  })();
+}
+
+function showStreakPopup(day, bonus){
+  const popup = el(`
+    <div class="avatar-modal" id="streakPopup">
+      <div class="avatar-modal-inner center">
+        <div style="font-size:36px;">🔥</div>
+        <div class="avatar-modal-title">Day ${day} login streak!</div>
+        <div class="sub" style="margin-bottom:14px;">+${bonus} points added to your balance</div>
+        ${day===7 ? `<div class="sub" style="color:var(--turmeric); margin-bottom:14px;">Full week streak! Starts over tomorrow.</div>` : ''}
+        <button type="button" class="btn btn-primary" id="streakPopupClose" style="width:100%;">Nice!</button>
+      </div>
+    </div>
+  `);
+  document.body.appendChild(popup);
+  document.getElementById('streakPopupClose').onclick = ()=>{ popup.remove(); sfxClick(); };
 }
 
 function renderSquad(){
@@ -1424,6 +1634,20 @@ function renderToss(){
           <div class="ball-icon" style="animation: spin 1.1s linear;"></div>
           <div class="sub" style="font-size:16px; margin-top:10px;" id="tossText">Flipping...</div>
         </div>
+        <div class="card" id="betCard" style="display:none;">
+          <div class="section-label">🎰 Place Your Bet (optional)</div>
+          <div class="sub" style="font-size:11px; margin-bottom:8px;">In-game points only — no cash value, nothing to withdraw.</div>
+          <div class="bet-teams">
+            <button type="button" class="bet-team-btn" id="betTeamA">${state.battingFirst.name}</button>
+            <button type="button" class="bet-team-btn" id="betTeamB">${state.bowlingFirst.name}</button>
+          </div>
+          <div class="bet-amount-row">
+            <input type="range" id="betAmountSlider" min="${MIN_BET}" max="${MAX_BET}" value="${MIN_BET}" step="5">
+            <div class="bet-amount-value" id="betAmountValue">${MIN_BET}</div>
+          </div>
+          <div class="sub" id="betBalanceNote" style="font-size:11px; margin-bottom:10px;"></div>
+          <button type="button" class="btn btn-primary" id="placeBetBtn" style="width:100%;" disabled>Place Bet</button>
+        </div>
       </main>
     </div>
   `);
@@ -1434,6 +1658,41 @@ function renderToss(){
     const btn = el(`<button class="btn btn-primary" style="margin-top:18px; width:100%;">Start Innings 1</button>`);
     btn.onclick = ()=>{ startInnings1(); render(); };
     document.querySelector('main .card').appendChild(btn);
+
+    const betCard = document.getElementById('betCard');
+    betCard.style.display = 'block';
+    let selectedTeamKey = null;
+    getPoints().then(points=>{
+      document.getElementById('betBalanceNote').textContent = `Balance: ${points} points`;
+      const slider = document.getElementById('betAmountSlider');
+      slider.max = Math.max(MIN_BET, Math.min(MAX_BET, points));
+      if(points < MIN_BET){
+        betCard.innerHTML = `<div class="section-label">🎰 Betting</div><div class="sub">Not enough points to bet right now (need at least ${MIN_BET}).</div>`;
+      }
+    });
+    const updateBetBtnState = ()=>{
+      document.getElementById('placeBetBtn').disabled = !selectedTeamKey;
+    };
+    const teamABtn = document.getElementById('betTeamA');
+    const teamBBtn = document.getElementById('betTeamB');
+    teamABtn.onclick = ()=>{ selectedTeamKey='A'; teamABtn.classList.add('selected'); teamBBtn.classList.remove('selected'); updateBetBtnState(); sfxClick(); };
+    teamBBtn.onclick = ()=>{ selectedTeamKey='B'; teamBBtn.classList.add('selected'); teamABtn.classList.remove('selected'); updateBetBtnState(); sfxClick(); };
+    document.getElementById('betAmountSlider').oninput = (e)=>{
+      document.getElementById('betAmountValue').textContent = e.target.value;
+    };
+    document.getElementById('placeBetBtn').onclick = async ()=>{
+      const amount = parseInt(document.getElementById('betAmountSlider').value, 10);
+      const bet = await placeBet(selectedTeamKey, amount);
+      if(!bet) return;
+      state.pendingBet = { teamRef: selectedTeamKey === 'A' ? state.battingFirst : state.bowlingFirst, stake: bet.stake };
+      const points = await getPoints();
+      betCard.innerHTML = `
+        <div class="section-label">🎰 Bet Placed</div>
+        <div class="sub">${bet.stake} points on <b style="color:var(--turmeric)">${state.pendingBet.teamRef.name}</b> to win the match.</div>
+        <div class="sub" style="font-size:11px; margin-top:4px;">Balance: ${points} points</div>
+      `;
+      sfxClick();
+    };
   }, 900);
   const style = document.createElement('style');
   style.textContent = `@keyframes spin{ from{transform:rotate(0deg) scale(1);} 50%{transform:rotate(540deg) scale(1.3);} to{transform:rotate(1080deg) scale(1);} }`;
@@ -1657,6 +1916,7 @@ function renderFinal(){
           ${motm ? `<div class="motm">${avatarForPlayer(motm.name, motm.avatarKey) ? `<img class="avatar-card" src="${avatarForPlayer(motm.name, motm.avatarKey)}">` : ''}⭐ Man of the Match: <b>${motm.name}</b> (${motm.points} pts)</div>` : ''}
           <div class="sub" id="statsSaveMsg" style="margin-top:8px; font-size:11px;">Saving career stats...</div>
         </div>
+        <div class="card bet-result-card" id="betResultCard" style="display:none;"></div>
         ${teamCardHTML(a)}
         ${teamCardHTML(b)}
         <button class="btn btn-primary" id="statsBtn">📊 View Player Stats</button>
@@ -1668,6 +1928,33 @@ function renderFinal(){
   app.appendChild(wrap);
   document.getElementById('statsBtn').onclick = ()=>{ state.screen='leaderboard'; render(); };
   document.getElementById('replayBtn').onclick = async ()=>{ await newMatch(); render(); };
+
+  if(!state.betResolvedForThisMatch){
+    state.betResolvedForThisMatch = true;
+    if(state.pendingBet){
+      const won = winner === state.pendingBet.teamRef;
+      const tied = !winner;
+      (async ()=>{
+        if(tied) await addPoints(state.pendingBet.stake);
+        else if(won) await addPoints(state.pendingBet.stake * 2);
+        // else: stake was already deducted when the bet was placed - nothing more to do
+
+        const card = document.getElementById('betResultCard');
+        const points = await getPoints();
+        card.style.display = 'block';
+        if(tied){
+          card.className = 'card bet-result-card';
+          card.innerHTML = `🎰 Match tied — your ${state.pendingBet.stake} point stake was refunded.<br><span class="sub">Balance: ${points} points</span>`;
+        } else if(won){
+          card.className = 'card bet-result-card win';
+          card.innerHTML = `🎉 Bet won! +${state.pendingBet.stake * 2} points<br><span class="sub">Balance: ${points} points</span>`;
+        } else {
+          card.className = 'card bet-result-card lose';
+          card.innerHTML = `😬 Bet lost — ${state.pendingBet.stake} points gone.<br><span class="sub">Balance: ${points} points</span>`;
+        }
+      })();
+    }
+  }
 
   if(!state.statsSavedForThisMatch){
     state.statsSavedForThisMatch = true;
@@ -1688,9 +1975,14 @@ function renderFinal(){
 }
 
 ensureSoundToggle();
+ensureMusicToggle();
 loadSoundPref().then(()=>{
   const btn = document.getElementById('soundToggleBtn');
   if(btn) btn.textContent = soundOn ? '🔊' : '🔇';
+});
+loadMusicPref().then(()=>{
+  const btn = document.getElementById('musicToggleBtn');
+  if(btn){ btn.style.opacity = musicOn ? '1' : '0.45'; }
 });
 render();
 </script>
