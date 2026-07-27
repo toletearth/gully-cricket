@@ -201,8 +201,8 @@ function sfxTen(){
   playTone(659, 0.12, 'sawtooth', 0.3, 0.55);
   playTone(784, 0.32, 'sawtooth', 0.35, 0.65);
   playNoise(0.55, 0.22, 3600, 0.5);
-  playNoise(0.18, 0.3, 6500, 0.75); // sharp glass-crack transient
-  playNoise(0.35, 0.15, 4200, 0.78);
+  playNoise(0.2, 0.32, 6500, 1.28); // sharp glass-crack transient, timed to the boom
+  playNoise(0.4, 0.18, 4200, 1.32);
 }
 function sfxOut(){
   playTone(180, 0.28, 'sawtooth', 0.28, 0.3);
@@ -216,38 +216,29 @@ function vibrateOut(){
 }
 function vibrateTen(){
   if(!soundOn) return;
-  try{
-    if(navigator.vibrate) navigator.vibrate([40, 30, 40, 30, 150]);
-  }catch(e){ /* vibration unsupported or blocked */ }
+  try{ if(navigator.vibrate) navigator.vibrate([30, 20, 30]); } // light tap on hit
+  catch(e){ /* vibration unsupported or blocked */ }
+}
+function vibrateBoom(){
+  if(!soundOn) return;
+  try{ if(navigator.vibrate) navigator.vibrate([50, 40, 50, 40, 220]); } // heavier buzz at impact
+  catch(e){ /* vibration unsupported or blocked */ }
 }
 function triggerScreenCrack(){
   const overlay = document.createElement('div');
   overlay.className = 'screen-crack-overlay';
   overlay.innerHTML = `
-    <svg viewBox="0 0 400 800" preserveAspectRatio="xMidYMid slice" class="crack-svg">
-      <defs>
-        <radialGradient id="crackFlash" cx="50%" cy="45%" r="60%">
-          <stop offset="0%" stop-color="#fff" stop-opacity="0.9"/>
-          <stop offset="40%" stop-color="#fff" stop-opacity="0.25"/>
-          <stop offset="100%" stop-color="#fff" stop-opacity="0"/>
-        </radialGradient>
-      </defs>
-      <rect x="0" y="0" width="400" height="800" fill="url(#crackFlash)"/>
-      <g stroke="#f4f0e6" stroke-width="1.6" fill="none" opacity="0.9" stroke-linecap="round">
-        <path d="M200 360 L120 200 M200 360 L90 300 M200 360 L60 420 M200 360 L110 480 M200 360 L170 560 M200 360 L250 580 M200 360 L310 460 M200 360 L330 340 M200 360 L300 230 M200 360 L240 180 M200 360 L200 150"/>
-        <path d="M120 200 L95 175 M120 200 L145 165 M90 300 L55 285 M60 420 L30 405 M60 420 L35 450 M110 480 L80 505 M170 560 L150 600 M250 580 L270 615 M310 460 L345 470 M330 340 L365 330 M300 230 L330 210"/>
-        <circle cx="200" cy="360" r="14" opacity="0.7"/>
-        <circle cx="200" cy="360" r="26" opacity="0.4"/>
-      </g>
-    </svg>
+    <div class="crack-flash"></div>
+    <img class="crack-image" src="assets/glass_crack.png">
   `;
   document.body.appendChild(overlay);
   document.body.classList.add('screen-shake');
+  vibrateBoom();
   setTimeout(()=>{
     overlay.classList.add('fade-out');
     document.body.classList.remove('screen-shake');
-  }, 380);
-  setTimeout(()=> overlay.remove(), 780);
+  }, 420);
+  setTimeout(()=> overlay.remove(), 850);
 }
 function sfxWin(){
   [523,659,784,1047].forEach((f,i)=> playTone(f, 0.22, 'sine', 0.25, 0.1 + i*0.13));
@@ -282,6 +273,11 @@ function ensureSoundToggle(){
 }
 
 // ---------- BACKGROUND MUSIC ----------
+// Playlist support: add more songs by uploading additional mp3 files named
+// music2.mp3, music3.mp3, etc. (same folder as index.html). Missing files
+// are skipped automatically - you don't need to fill every slot.
+const MUSIC_TRACKS = ['music.mp3', 'music2.mp3', 'music3.mp3', 'music4.mp3', 'music5.mp3', 'music6.mp3'];
+let currentTrackIndex = 0;
 let musicOn = true;
 async function loadMusicPref(){
   if(!storageAvailable()) return;
@@ -313,6 +309,8 @@ function ensureMusicToggle(){
   if(document.getElementById('musicToggleBtn')) return;
   const audio = document.getElementById('bgMusic');
   audio.volume = musicVolume;
+  audio.removeAttribute('loop'); // looping is now handled per-playlist, not per-track
+  audio.src = MUSIC_TRACKS[currentTrackIndex];
 
   const btn = document.createElement('button');
   btn.id = 'musicToggleBtn';
@@ -323,8 +321,10 @@ function ensureMusicToggle(){
   const popover = el(`
     <div id="musicPopover" class="music-popover hidden">
       <div class="section-label" style="margin-bottom:8px;">🎵 Background Music</div>
-      <div id="musicStatusMsg" class="sub" style="font-size:11px; margin-bottom:10px;">Checking...</div>
-      <button type="button" class="btn btn-primary" id="musicPlayBtn" style="width:100%; margin-bottom:10px;">▶️ Play Music</button>
+      <div id="musicStatusMsg" class="sub" style="font-size:11px; margin-bottom:6px;">Checking...</div>
+      <div id="musicNowPlaying" class="sub" style="font-size:11px; margin-bottom:10px; color:var(--turmeric);"></div>
+      <button type="button" class="btn btn-primary" id="musicPlayBtn" style="width:100%; margin-bottom:8px;">▶️ Play Music</button>
+      <button type="button" class="btn btn-secondary" id="musicNextBtn" style="width:100%; margin-bottom:10px;">⏭️ Next Track</button>
       <label style="font-size:12px; color:rgba(242,236,220,0.6);">Volume</label>
       <div class="bet-amount-row" style="margin:6px 0 4px;">
         <input type="range" id="musicVolumeSlider" min="0" max="100" value="${Math.round(musicVolume*100)}">
@@ -336,16 +336,38 @@ function ensureMusicToggle(){
   document.body.appendChild(popover);
 
   const statusEl = document.getElementById('musicStatusMsg');
+  const nowPlayingEl = document.getElementById('musicNowPlaying');
   const setStatus = (text, isError)=>{
     statusEl.textContent = text;
     statusEl.style.color = isError ? 'var(--ball-red-bright)' : '';
   };
+  const updateNowPlaying = ()=>{
+    nowPlayingEl.textContent = `Track ${currentTrackIndex+1} of ${MUSIC_TRACKS.length}: ${MUSIC_TRACKS[currentTrackIndex]}`;
+  };
+  updateNowPlaying();
+
+  let errorSkipsInARow = 0;
+  function loadTrack(index, autoplay){
+    currentTrackIndex = ((index % MUSIC_TRACKS.length) + MUSIC_TRACKS.length) % MUSIC_TRACKS.length;
+    audio.src = MUSIC_TRACKS[currentTrackIndex];
+    updateNowPlaying();
+    if(autoplay && musicOn){
+      audio.play().then(()=> setStatus('▶️ Playing')).catch(()=>{});
+    }
+  }
 
   audio.addEventListener('error', ()=>{
-    setStatus('⚠️ Could not load music.mp3 — make sure it\'s uploaded in the same folder as index.html (filename is case-sensitive).', true);
+    errorSkipsInARow++;
+    if(errorSkipsInARow >= MUSIC_TRACKS.length){
+      setStatus('⚠️ No playable tracks found. Make sure music.mp3 is uploaded next to index.html.', true);
+      return;
+    }
+    setStatus(`⚠️ ${MUSIC_TRACKS[currentTrackIndex]} not found — skipping to next track.`, true);
+    loadTrack(currentTrackIndex + 1, true);
   });
-  audio.addEventListener('playing', ()=> setStatus('▶️ Playing'));
+  audio.addEventListener('playing', ()=>{ errorSkipsInARow = 0; setStatus('▶️ Playing'); });
   audio.addEventListener('pause', ()=> setStatus('⏸️ Paused'));
+  audio.addEventListener('ended', ()=> loadTrack(currentTrackIndex + 1, true));
 
   btn.onclick = ()=>{
     popover.classList.toggle('hidden');
@@ -364,6 +386,12 @@ function ensureMusicToggle(){
     }).catch(err=>{
       setStatus('⚠️ Playback blocked: ' + (err && err.message ? err.message : 'unknown error'), true);
     });
+  };
+
+  document.getElementById('musicNextBtn').onclick = ()=>{
+    errorSkipsInARow = 0;
+    loadTrack(currentTrackIndex + 1, true);
+    sfxClick();
   };
 
   document.getElementById('musicVolumeSlider').oninput = (e)=>{
@@ -508,7 +536,7 @@ const TOTAL_BALLS = OVERS * 6; // 24 balls -> each of the 4 bowlers gets exactly
 const MAX_WICKETS = 3; // team of 4 -> all out when 3rd wicket falls (last man stands)
 
 function makePlayer(name, avatarKey){
-  return { name, avatarKey: avatarKey||null, runs:0, ballsFaced:0, isOut:false, dismissal:"", bowledBalls:0, wicketsTaken:0, points:0, tensHit:0, sixesHit:0, foursHit:0 };
+  return { name, avatarKey: avatarKey||null, runs:0, ballsFaced:0, isOut:false, dismissal:"", bowledBalls:0, runsConceded:0, wicketsTaken:0, points:0, tensHit:0, sixesHit:0, foursHit:0 };
 }
 function makeTeam(name, names, avatarKeys, logoKey){
   const keys = avatarKeys || [];
@@ -606,7 +634,7 @@ async function updateCareerStats(players){
   if(!storageAvailable()) return;
   for(const p of players){
     const key = 'gully:career:' + slug(p.name);
-    let existing = { name:p.name, matches:0, runs:0, wickets:0, points:0, tens:0, sixes:0, fours:0, motm:0 };
+    let existing = { name:p.name, matches:0, runs:0, wickets:0, points:0, tens:0, sixes:0, fours:0, motm:0, ballsFaced:0, bowledBalls:0, runsConceded:0 };
     try{
       const res = await window.storage.get(key);
       if(res && res.value) existing = JSON.parse(res.value);
@@ -620,6 +648,9 @@ async function updateCareerStats(players){
     existing.tens += (p.tensHit||0);
     existing.sixes += (p.sixesHit||0);
     existing.fours = (existing.fours||0) + (p.foursHit||0);
+    existing.ballsFaced = (existing.ballsFaced||0) + (p.ballsFaced||0);
+    existing.bowledBalls = (existing.bowledBalls||0) + (p.bowledBalls||0);
+    existing.runsConceded = (existing.runsConceded||0) + (p.runsConceded||0);
     if(p.isMotm) existing.motm += 1;
     try{ await window.storage.set(key, JSON.stringify(existing)); }
     catch(e){ console.error('Could not save career stats for', p.name, e); }
@@ -717,7 +748,7 @@ function bowlBall(){
   // sound effects - timed to roughly land when the bat-swing/out animation connects
   sfxBowl();
   if(isOut){ sfxOut(); vibrateOut(); }
-  else if(runs === 10){ sfxTen(); vibrateTen(); setTimeout(triggerScreenCrack, 500); }
+  else if(runs === 10){ sfxTen(); vibrateTen(); setTimeout(triggerScreenCrack, 1300); }
   else if(runs === 6) sfxSix();
   else if(runs === 4) sfxFour();
   else if(runs === 0) sfxDefend();
@@ -731,6 +762,7 @@ function bowlBall(){
     bowler.points += 5;
   } else {
     bt.score += runs;
+    bowler.runsConceded += runs;
     batter.runs += runs;
     batter.points += runs;
     batter.ballsFaced += 1;
@@ -1230,9 +1262,14 @@ function renderLeaderboard(){
     app.removeChild(loadingMain);
     const rowsHTML = players.length === 0
       ? `<div class="sub center">No matches played yet. Play one to get on the board!</div>`
-      : `<table style="min-width:520px;">
-          <tr><th>#</th><th>Player</th><th class="num">M</th><th class="num">Runs</th><th class="num">Wkts</th><th class="num">6s</th><th class="num">4s</th><th class="num">10s</th><th class="num">Pts</th></tr>
-          ${players.map((p,i)=>`
+      : `<table style="min-width:680px;">
+          <tr><th>#</th><th>Player</th><th class="num">M</th><th class="num">Runs</th><th class="num">SR</th><th class="num">Wkts</th><th class="num">Econ</th><th class="num">6s</th><th class="num">4s</th><th class="num">10s</th><th class="num">Pts</th></tr>
+          ${players.map((p,i)=>{
+            const balls = p.ballsFaced||0;
+            const strikeRate = balls > 0 ? ((p.runs/balls)*100).toFixed(1) : '-';
+            const overs = (p.bowledBalls||0)/6;
+            const economy = overs > 0 ? (p.runsConceded/overs).toFixed(1) : '-';
+            return `
             <tr>
               <td>${i+1}</td>
               <td class="lb-name">
@@ -1241,12 +1278,14 @@ function renderLeaderboard(){
               </td>
               <td class="num">${p.matches}</td>
               <td class="num">${p.runs}</td>
+              <td class="num">${strikeRate}</td>
               <td class="num">${p.wickets}</td>
+              <td class="num">${economy}</td>
               <td class="num">${p.sixes||0}</td>
               <td class="num">${p.fours||0}</td>
               <td class="num">${p.tens||0}</td>
               <td class="num">${p.points}</td>
-            </tr>`).join('')}
+            </tr>`;}).join('')}
         </table>`;
     const main = el(`
       <main>
@@ -1273,10 +1312,9 @@ function renderToss(){
       </div>
       <main>
         <div class="card center" id="tossCard" style="padding:40px 18px;">
-          <div class="coin-flip-scene"><div class="coin-flip-inner">
-            <img class="coin-face" src="${COIN_HEADS}">
-            <img class="coin-face back" src="${COIN_TAILS}">
-          </div></div>
+          <div class="coin-flip-scene">
+            <img class="coin-flip" id="tossCoinImg" src="${COIN_HEADS}">
+          </div>
           <div class="sub" style="font-size:16px; margin-top:10px;" id="tossText">Flipping...</div>
         </div>
         <div class="card" id="betCard">
@@ -1297,6 +1335,30 @@ function renderToss(){
     </div>
   `);
   app.appendChild(wrap);
+
+  // play the coin flip: squash the image and swap faces at each squash
+  // midpoint - this avoids relying on CSS backface-visibility, which many
+  // mobile browsers don't reliably support on <img> elements
+  const coinImg = document.getElementById('tossCoinImg');
+  if(coinImg){
+    coinImg.classList.add('spinning');
+    // CSS: 9 cycles of 150ms each (scaleX 1->0.05->1). The image is
+    // edge-on/invisible at each cycle's 75ms midpoint - swap the face
+    // exactly there so the transition is seamless, not a visible pop.
+    let flipCount = 0;
+    const totalFlips = 9;
+    const cycleMs = 150;
+    setTimeout(function swapFace(){
+      flipCount++;
+      coinImg.src = (flipCount % 2 === 1) ? COIN_TAILS : COIN_HEADS;
+      if(flipCount < totalFlips){
+        setTimeout(swapFace, cycleMs);
+      } else {
+        coinImg.classList.remove('spinning');
+        setTimeout(()=>{ coinImg.src = COIN_HEADS; }, cycleMs/2);
+      }
+    }, cycleMs/2);
+  }
 
   // wire betting immediately - no setTimeout dependency
   const betCard = document.getElementById('betCard');
@@ -1390,7 +1452,7 @@ function renderPlay(){
     } else if(state.lastRuns === 10){
       strikerAnim = 'anim-big-swing';
       bowlerAnim = 'anim-bowl anim-stunned';
-      ballTravelClass += ' fly-huge fly-rocket';
+      ballTravelClass += ' fly-rocket-seq fly-rocket';
     } else if(state.lastRuns === 6){
       strikerAnim = 'anim-big-swing';
       ballTravelClass += ' fly-six';
