@@ -882,8 +882,8 @@ function renderTitle(){
           <div style="margin-top:6px;"><b>All out:</b> 3 wickets down with a 4-a-side team, last man can't bat alone.</div>
           <div style="margin-top:6px;"><b>Match:</b> 4 overs (24 balls) per innings — each bowler gets exactly one over. Chase the target to win.</div>
         </div>
-        <button class="btn btn-primary" id="startBtn">Start Match 🏏</button>
-        <button class="btn btn-secondary" id="squadBtn">Choose Team 📋</button>
+        <button class="btn btn-primary" id="startBtn">Toss the coin 🪙</button>
+        <button class="btn btn-secondary" id="squadBtn">Edit your squad 📋</button>
         <button class="btn btn-secondary" id="leaderboardBtn">Gully leaderboard 🏆</button>
       </main>
       <footer>made for the gully · not for sale · points have no cash value</footer>
@@ -1424,8 +1424,7 @@ function renderToss(){
     document.getElementById('tossText').innerHTML =
       `<b style="color:var(--turmeric)">${state.battingFirst.name}</b> won the toss and will bat first!`;
     const btn = el(`<button class="btn btn-primary" style="margin-top:18px; width:100%;">Start Innings 1</button>`);
-    btn.onclick = ()=>{ startInnings1(); showWelcome();
-render();; };
+    btn.onclick = ()=>{ startInnings1(); render(); };
     document.getElementById('tossCard').appendChild(btn);
   }, 900);
   const style = document.createElement('style');
@@ -1448,38 +1447,7 @@ function renderPlay(){
   const targetLine = m.target !== null
     ? `<div class="target-line">🎯 Target: <b>${m.target+1}</b> — need ${Math.max(m.target+1-bt.score,0)} from ${m.remaining} ball${m.remaining!==1?'s':''}</div>`
     : '';
-// -------- WELCOME POPUP (First-time players) --------
-function showWelcome() {
-  if (localStorage.getItem('gully:welcomeShown')) return;
-  const overlay = document.createElement('div');
-  overlay.id = 'welcomeOverlay';
-  overlay.style.cssText = `
-    position:fixed; top:0; left:0; right:0; bottom:0;
-    background:rgba(0,0,0,0.85); z-index:999;
-    display:flex; align-items:center; justify-content:center;
-  `;
-  overlay.innerHTML = `
-    <div style="background:#211d1a; padding:2rem; border-radius:16px; max-width:400px; text-align:center; color:white; border:1px solid #D9A441;">
-      <h2 style="color:#D9A441; margin-top:0;">🏏 Gully Cricket</h2>
-      <p style="margin:1rem 0; line-height:1.6;">
-        Tap <strong>"Start Match"</strong> to begin.<br>
-        Earn points for runs, wickets &amp; wins!
-      </p>
-      <p style="font-size:0.9rem; opacity:0.7;">
-        💰 Points unlock bats, players &amp; balls in the shop.
-      </p>
-      <button id="closeWelcomeBtn" style="margin-top:1.5rem; background:#D9A441; color:#1e4568; border:none; padding:10px 28px; border-radius:8px; font-weight:bold; font-size:1rem; cursor:pointer;">
-        Got it! 👊
-      </button>
-    </div>
-  `;
-  document.body.appendChild(overlay);
-  document.getElementById('closeWelcomeBtn').onclick = function() {
-    overlay.remove();
-    localStorage.setItem('gully:welcomeShown', 'true');
-    sfxClick();
-  };
-}
+
   let flashClass = 'runs-flash';
   let flashText = '';
   if(msg){
