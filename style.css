@@ -831,7 +831,7 @@
   .screen-crack-overlay{
     position: fixed;
     inset: 0;
-    z-index: 200;
+    z-index: 180;
     pointer-events: none;
     animation: crackFlashIn 0.12s ease-out;
     opacity: 1;
@@ -846,7 +846,7 @@
     position:absolute; inset:0;
     width:100%; height:100%;
     object-fit: cover;
-    object-position: center 42%;
+    object-position: center 22%;
     mix-blend-mode: screen;
   }
   @keyframes crackFlashIn{
