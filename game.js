@@ -201,8 +201,8 @@ function sfxTen(){
   playTone(659, 0.12, 'sawtooth', 0.3, 0.55);
   playTone(784, 0.32, 'sawtooth', 0.35, 0.65);
   playNoise(0.55, 0.22, 3600, 0.5);
-  playNoise(0.2, 0.32, 6500, 1.28); // sharp glass-crack transient, timed to the boom
-  playNoise(0.4, 0.18, 4200, 1.32);
+  playNoise(0.2, 0.32, 6500, 1.62); // sharp glass-crack transient, timed to the boom
+  playNoise(0.4, 0.18, 4200, 1.66);
 }
 function sfxOut(){
   playTone(180, 0.28, 'sawtooth', 0.28, 0.3);
@@ -235,10 +235,26 @@ function triggerScreenCrack(){
   document.body.classList.add('screen-shake');
   vibrateBoom();
   setTimeout(()=>{
-    overlay.classList.add('fade-out');
     document.body.classList.remove('screen-shake');
   }, 420);
-  setTimeout(()=> overlay.remove(), 850);
+  setTimeout(()=>{
+    overlay.classList.add('fade-out');
+  }, 1900);
+  setTimeout(()=> overlay.remove(), 2500);
+}
+function triggerRocketSequence(){
+  const rocket = document.createElement('div');
+  rocket.className = 'rocket-overlay';
+  rocket.textContent = '🚀';
+  rocket.style.left = '74%';
+  rocket.style.top = '70%';
+  document.body.appendChild(rocket);
+  // force layout so the starting position registers before the animation class applies
+  requestAnimationFrame(()=> requestAnimationFrame(()=> rocket.classList.add('rocket-fly')));
+  setTimeout(()=>{
+    rocket.remove();
+    triggerScreenCrack();
+  }, 1100);
 }
 function sfxWin(){
   [523,659,784,1047].forEach((f,i)=> playTone(f, 0.22, 'sine', 0.25, 0.1 + i*0.13));
@@ -748,7 +764,7 @@ function bowlBall(){
   // sound effects - timed to roughly land when the bat-swing/out animation connects
   sfxBowl();
   if(isOut){ sfxOut(); vibrateOut(); }
-  else if(runs === 10){ sfxTen(); vibrateTen(); setTimeout(triggerScreenCrack, 1300); }
+  else if(runs === 10){ sfxTen(); vibrateTen(); setTimeout(triggerRocketSequence, 550); }
   else if(runs === 6) sfxSix();
   else if(runs === 4) sfxFour();
   else if(runs === 0) sfxDefend();
@@ -1342,20 +1358,19 @@ function renderToss(){
   const coinImg = document.getElementById('tossCoinImg');
   if(coinImg){
     coinImg.classList.add('spinning');
-    // CSS: 9 cycles of 150ms each (scaleX 1->0.05->1). The image is
-    // edge-on/invisible at each cycle's 75ms midpoint - swap the face
-    // exactly there so the transition is seamless, not a visible pop.
-    let flipCount = 0;
-    const totalFlips = 9;
+    // Fixed flip sequence: 1=heads, 0=tails. Each digit shows for one
+    // 150ms squash cycle; swapped at the cycle's 75ms midpoint (edge-on,
+    // invisible) so the transition is seamless.
+    const flipSequence = [1, 0, 1, 1, 0];
     const cycleMs = 150;
-    setTimeout(function swapFace(){
-      flipCount++;
-      coinImg.src = (flipCount % 2 === 1) ? COIN_TAILS : COIN_HEADS;
-      if(flipCount < totalFlips){
-        setTimeout(swapFace, cycleMs);
+    let i = 0;
+    setTimeout(function showNext(){
+      coinImg.src = flipSequence[i] === 1 ? COIN_HEADS : COIN_TAILS;
+      i++;
+      if(i < flipSequence.length){
+        setTimeout(showNext, cycleMs);
       } else {
         coinImg.classList.remove('spinning');
-        setTimeout(()=>{ coinImg.src = COIN_HEADS; }, cycleMs/2);
       }
     }, cycleMs/2);
   }
@@ -1493,15 +1508,15 @@ function renderPlay(){
             <div class="lane compact">
               <div class="player-mini">
                 <span class="avatar-wrap ${bowlerAnim}">${avatarForPlayer(bowler.name, bowler.avatarKey, 'bowl') ? `<img class="avatar-mini" src="${avatarForPlayer(bowler.name, bowler.avatarKey, 'bowl')}">` : '🤾'}</span>
-                <span>${bowler.name}</span><small>bowling</small>
+                <span>${bowler.name}</span><small>Econ ${bowler.bowledBalls > 0 ? (bowler.runsConceded/(bowler.bowledBalls/6)).toFixed(1) : '-'}</small>
               </div>
               <div class="player-mini">
                 <span class="avatar-wrap ${runnerAnim}">${avatarForPlayer(ns.name, ns.avatarKey) ? `<img class="avatar-mini" src="${avatarForPlayer(ns.name, ns.avatarKey)}">` : '🏏'}</span>
-                <span>${ns.name}</span><small>${ns.runs} (${ns.ballsFaced})</small>
+                <span>${ns.name}</span><small>${ns.runs} (${ns.ballsFaced}) SR ${ns.ballsFaced > 0 ? ((ns.runs/ns.ballsFaced)*100).toFixed(1) : '-'}</small>
               </div>
               <div class="player-mini striker">
                 <span class="avatar-wrap ${strikerAnim} ${runnerAnim}">${avatarForPlayer(s.name, s.avatarKey) ? `<img class="avatar-mini" src="${avatarForPlayer(s.name, s.avatarKey)}">` : '🏏'}</span>
-                <span>${s.name} *</span><small>${s.runs} (${s.ballsFaced})</small>
+                <span>${s.name} *</span><small>${s.runs} (${s.ballsFaced}) SR ${s.ballsFaced > 0 ? ((s.runs/s.ballsFaced)*100).toFixed(1) : '-'}</small>
               </div>
               ${ballTravelClass ? `<div class="${ballTravelClass}">${state.lastRuns === 10 ? '🚀' : '🔴'}</div>` : ''}
             </div>
