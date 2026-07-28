@@ -201,8 +201,8 @@ function sfxTen(){
   playTone(659, 0.12, 'sawtooth', 0.3, 0.55);
   playTone(784, 0.32, 'sawtooth', 0.35, 0.65);
   playNoise(0.55, 0.22, 3600, 0.5);
-  playNoise(0.2, 0.32, 6500, 1.62); // sharp glass-crack transient, timed to the boom
-  playNoise(0.4, 0.18, 4200, 1.66);
+  playNoise(0.2, 0.32, 6500, 2.22); // sharp glass-crack transient, timed to the boom
+  playNoise(0.4, 0.18, 4200, 2.26);
 }
 function sfxOut(){
   playTone(180, 0.28, 'sawtooth', 0.28, 0.3);
@@ -245,7 +245,7 @@ function triggerScreenCrack(){
 function triggerRocketSequence(){
   const rocket = document.createElement('div');
   rocket.className = 'rocket-overlay';
-  rocket.textContent = '🚀';
+  rocket.innerHTML = '<img class="rocket-img" src="assets/fireball.png">';
   rocket.style.left = '74%';
   rocket.style.top = '70%';
   document.body.appendChild(rocket);
@@ -254,7 +254,7 @@ function triggerRocketSequence(){
   setTimeout(()=>{
     rocket.remove();
     triggerScreenCrack();
-  }, 1100);
+  }, 1700);
 }
 function sfxWin(){
   [523,659,784,1047].forEach((f,i)=> playTone(f, 0.22, 'sine', 0.25, 0.1 + i*0.13));
@@ -583,7 +583,7 @@ function simulateBall(){
 }
 
 function ballMessage(batter, bowler, runs, isOut, dismissal){
-  if(runs === 10) return { text: `${batter.name} takes the Auntie's Garden route! 10 RUNS! 🚀`, kind:'big' };
+  if(runs === 10) return { text: `${batter.name} takes the Auntie's Garden route! 10 RUNS! 🔥`, kind:'big' };
   if(isOut){
     if(dismissal === "over auntie's garden") return { text: `🌳 ${batter.name} goes big over Auntie's Garden... caught at the wall! ${bowler.name} strikes!`, kind:'out' };
     if(dismissal === 'bowled') return { text: `🏏 ${batter.name} is BOWLED by ${bowler.name}!`, kind:'out' };
@@ -1518,7 +1518,7 @@ function renderPlay(){
                 <span class="avatar-wrap ${strikerAnim} ${runnerAnim}">${avatarForPlayer(s.name, s.avatarKey) ? `<img class="avatar-mini" src="${avatarForPlayer(s.name, s.avatarKey)}">` : '🏏'}</span>
                 <span>${s.name} *</span><small>${s.runs} (${s.ballsFaced}) SR ${s.ballsFaced > 0 ? ((s.runs/s.ballsFaced)*100).toFixed(1) : '-'}</small>
               </div>
-              ${ballTravelClass ? `<div class="${ballTravelClass}">${state.lastRuns === 10 ? '🚀' : '🔴'}</div>` : ''}
+              ${ballTravelClass ? `<div class="${ballTravelClass}">${state.lastRuns === 10 ? '<img class="fireball-mini" src="assets/fireball.png">' : '🔴'}</div>` : ''}
             </div>
           </div>
           ${msg ? `
@@ -1532,7 +1532,7 @@ function renderPlay(){
         <div class="card">
           <div class="section-label">Batting</div>
           <table>
-            <tr><th>Batter</th><th class="num">R</th><th class="num">B</th></tr>
+            <tr><th>Batter</th><th class="num">R</th><th class="num">B</th><th class="num">SR</th></tr>
             ${bt.players.map(p=>`
               <tr>
                 <td>${avatarForPlayer(p.name, p.avatarKey) ? `<img class="avatar-thumb" src="${avatarForPlayer(p.name, p.avatarKey)}">` : ''}${p.name} ${p===s?'<span class="not-out">●striker</span>':(p===ns?'<span class="not-out">●</span>':'')}
@@ -1540,6 +1540,7 @@ function renderPlay(){
                 </td>
                 <td class="num">${p.runs}</td>
                 <td class="num">${p.ballsFaced}</td>
+                <td class="num">${p.ballsFaced > 0 ? ((p.runs/p.ballsFaced)*100).toFixed(1) : '-'}</td>
               </tr>`).join('')}
           </table>
         </div>
@@ -1547,9 +1548,9 @@ function renderPlay(){
         <div class="card">
           <div class="section-label">Bowling</div>
           <table>
-            <tr><th>Bowler</th><th class="num">Balls</th><th class="num">Wkts</th></tr>
+            <tr><th>Bowler</th><th class="num">Balls</th><th class="num">Wkts</th><th class="num">Econ</th></tr>
             ${bw.players.filter(p=>p.bowledBalls>0).map(p=>`
-              <tr><td>${avatarForPlayer(p.name, p.avatarKey, 'bowl') ? `<img class="avatar-thumb" src="${avatarForPlayer(p.name, p.avatarKey, 'bowl')}">` : ''}${p.name}</td><td class="num">${p.bowledBalls}</td><td class="num">${p.wicketsTaken}</td></tr>
+              <tr><td>${avatarForPlayer(p.name, p.avatarKey, 'bowl') ? `<img class="avatar-thumb" src="${avatarForPlayer(p.name, p.avatarKey, 'bowl')}">` : ''}${p.name}</td><td class="num">${p.bowledBalls}</td><td class="num">${p.wicketsTaken}</td><td class="num">${(p.runsConceded/(p.bowledBalls/6)).toFixed(1)}</td></tr>
             `).join('')}
           </table>
         </div>
@@ -1610,20 +1611,25 @@ function renderSummary1(){
 
 function teamCardHTML(team, showBatting){
   return `
-    <div class="card">
+    <div class="card" style="overflow-x:auto;">
       <div class="section-label">${team.name} — ${team.score}/${team.wickets}</div>
-      <table>
-        <tr><th>Player</th><th class="num">R</th><th class="num">Wkts</th><th class="num">Pts</th></tr>
-        ${team.players.map(p=>`
+      <table style="min-width:420px;">
+        <tr><th>Player</th><th class="num">R</th><th class="num">SR</th><th class="num">Wkts</th><th class="num">Econ</th><th class="num">Pts</th></tr>
+        ${team.players.map(p=>{
+          const sr = p.ballsFaced > 0 ? ((p.runs/p.ballsFaced)*100).toFixed(1) : '-';
+          const econ = p.bowledBalls > 0 ? (p.runsConceded/(p.bowledBalls/6)).toFixed(1) : '-';
+          return `
           <tr>
             <td>
               ${avatarForPlayer(p.name, p.avatarKey) ? `<img class="avatar-thumb" src="${avatarForPlayer(p.name, p.avatarKey)}">` : ''}${p.name}
               ${p.isOut?`<div class="out-tag">${p.dismissal}</div>`:''}
             </td>
             <td class="num">${p.runs}</td>
+            <td class="num">${sr}</td>
             <td class="num">${p.wicketsTaken}</td>
+            <td class="num">${econ}</td>
             <td class="num">${p.points}</td>
-          </tr>`).join('')}
+          </tr>`;}).join('')}
       </table>
     </div>
   `;
