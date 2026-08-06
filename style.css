@@ -245,6 +245,11 @@
     color: rgba(242,236,220,0.75);
   }
   .rules b{ color: var(--turmeric); }
+  .series-btn-row{
+    display:flex;
+    gap: 8px;
+  }
+  .series-btn-row .btn{ flex:1; }
   .points-balance{
     font-family:'Baloo 2', sans-serif;
     font-weight:800;
@@ -269,6 +274,28 @@
     cursor:pointer;
     text-align:center;
   }
+  .picker-grid{
+    display:grid;
+    grid-template-columns: repeat(auto-fit, minmax(80px, 1fr));
+    gap: 10px;
+  }
+  .picker-option{
+    display:flex;
+    flex-direction:column;
+    align-items:center;
+    gap:6px;
+    background: rgba(242,236,220,0.06);
+    border: 2px solid var(--line);
+    border-radius: 12px;
+    padding: 10px 6px;
+    color: var(--chalk);
+    font-family:'Baloo 2', sans-serif;
+    font-weight:700;
+    font-size: 12px;
+    cursor:pointer;
+    text-align:center;
+  }
+  .picker-option:active{ border-color: var(--turmeric); background: rgba(217,164,65,0.15); }
   .bet-team-btn.selected{
     border-color: var(--turmeric);
     background: rgba(217,164,65,0.15);
