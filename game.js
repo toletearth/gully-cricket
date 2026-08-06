@@ -646,6 +646,39 @@ async function saveRoster(roster){
   }
 }
 
+async function getSeriesRecords(){
+  if(!storageAvailable()) return [];
+  try{
+    const list = await window.storage.list('gully:seriesRecord:');
+    if(!list || !list.keys || !list.keys.length) return [];
+    const records = [];
+    for(const k of list.keys){
+      try{
+        const res = await window.storage.get(k);
+        if(res && res.value) records.push(JSON.parse(res.value));
+      }catch(e){ /* skip unreadable entry */ }
+    }
+    records.sort((a,b)=> b.seriesWon - a.seriesWon);
+    return records;
+  }catch(e){ return []; }
+}
+async function updateSeriesRecord(teamName, won, tied, logoKey){
+  if(!storageAvailable()) return;
+  const key = 'gully:seriesRecord:' + slug(teamName);
+  let existing = { name: teamName, seriesPlayed:0, seriesWon:0, seriesTied:0, logoKey: logoKey||null };
+  try{
+    const res = await window.storage.get(key);
+    if(res && res.value) existing = JSON.parse(res.value);
+  }catch(e){ /* first series for this team */ }
+  existing.name = teamName;
+  if(logoKey) existing.logoKey = logoKey;
+  existing.seriesPlayed += 1;
+  if(won) existing.seriesWon += 1;
+  else if(tied) existing.seriesTied += 1;
+  try{ await window.storage.set(key, JSON.stringify(existing)); }
+  catch(e){ console.error('Could not save series record for', teamName, e); }
+}
+
 async function updateCareerStats(players){
   if(!storageAvailable()) return;
   for(const p of players){
@@ -694,6 +727,51 @@ async function loadLeaderboard(){
 let state = { screen: 'title' };
 const app = document.getElementById('app');
 
+function freshTeamState(team){
+  team.players.forEach(p=>{
+    p.runs=0; p.ballsFaced=0; p.isOut=false; p.dismissal="";
+    p.bowledBalls=0; p.runsConceded=0; p.wicketsTaken=0; p.points=0;
+    p.tensHit=0; p.sixesHit=0; p.foursHit=0;
+  });
+  team.score=0; team.wickets=0;
+  team.strikerIdx=0; team.nonStrikerIdx=1; team.nextBatterIdx=2;
+}
+
+async function startSeries(format){
+  const roster = await loadRoster();
+  const teamA = makeTeam(roster.teamAName, roster.teamAPlayers, roster.teamAAvatars, roster.teamALogo);
+  const teamB = makeTeam(roster.teamBName, roster.teamBPlayers, roster.teamBAvatars, roster.teamBLogo);
+  state = {
+    screen: 'toss',
+    series: {
+      format,                 // 3 or 5
+      matchIndex: 0,           // 0-based index of the current match
+      teamA, teamB,
+      winsA: 0, winsB: 0, tiedMatches: 0,
+      seriesBet: null,         // { teamRef, stake } - placed once, before match 1
+    },
+    innings: 1,
+    lastMsg: null,
+  };
+  startSeriesMatch();
+}
+
+function startSeriesMatch(){
+  const s = state.series;
+  freshTeamState(s.teamA);
+  freshTeamState(s.teamB);
+  const battingFirst = rand() < 0.5 ? s.teamA : s.teamB;
+  const bowlingFirst = battingFirst === s.teamA ? s.teamB : s.teamA;
+  state.battingFirst = battingFirst;
+  state.bowlingFirst = bowlingFirst;
+  state.innings = 1;
+  state.lastMsg = null;
+  state.screen = 'toss';
+  state.statsSavedForThisMatch = false;
+  state.betResolvedForThisMatch = false;
+  delete state.pendingBet; // no per-match betting inside a series - only the one series-level bet
+}
+
 async function newMatch(){
   const roster = await loadRoster();
   const teamA = makeTeam(roster.teamAName, roster.teamAPlayers, roster.teamAAvatars, roster.teamALogo);
@@ -716,6 +794,7 @@ function startInnings1(){
     bowlerIdx: 0,
     target: null,
     over: false, result: null,
+    overBowlerLocked: false, awaitingBatterPick: false, pendingEndOfOverSwap: false,
   };
   bt.strikerIdx = 0; bt.nonStrikerIdx = 1; bt.nextBatterIdx = 2;
   state.screen = 'play';
@@ -733,6 +812,7 @@ function startInnings2(){
     bowlerIdx: 0,
     target: state.battingFirst.score,
     over: false, result: null,
+    overBowlerLocked: false, awaitingBatterPick: false, pendingEndOfOverSwap: false,
   };
   state.innings = 2;
   state.screen = 'play';
@@ -750,7 +830,7 @@ function bowlBall(){
   if(m.over) return;
 
   let bowler = currentBowler(m);
-  if(bowler.bowledBalls >= 6 && m.bowlerIdx < m.bowlingTeam.players.length - 1){
+  if(bowler.bowledBalls >= 6 && m.bowlerIdx < m.bowlingTeam.players.length - 1 && m.bowlingTeam !== state.controlledTeamRef){
     m.bowlerIdx += 1;
     bowler = currentBowler(m);
   }
@@ -801,8 +881,13 @@ function bowlBall(){
   let allOut = false;
   if(isOut){
     if(bt.wickets < MAX_WICKETS && bt.nextBatterIdx < bt.players.length){
-      bt.strikerIdx = bt.nextBatterIdx;
-      bt.nextBatterIdx += 1;
+      if(bt === state.controlledTeamRef){
+        m.awaitingBatterPick = true;
+        m.pendingEndOfOverSwap = (m.ballCount % 6 === 0);
+      } else {
+        bt.strikerIdx = bt.nextBatterIdx;
+        bt.nextBatterIdx += 1;
+      }
     } else {
       allOut = true;
     }
@@ -811,11 +896,15 @@ function bowlBall(){
   if(!isOut && runs % 2 !== 0){
     [bt.strikerIdx, bt.nonStrikerIdx] = [bt.nonStrikerIdx, bt.strikerIdx];
   }
-  if(m.ballCount % 6 === 0){
+  if(m.ballCount % 6 === 0 && !m.awaitingBatterPick){
     [bt.strikerIdx, bt.nonStrikerIdx] = [bt.nonStrikerIdx, bt.strikerIdx];
   }
 
   m.remaining -= 1;
+
+  if(m.ballCount % 6 === 0 && m.remaining > 0){
+    m.overBowlerLocked = false; // new over about to start - controlled team needs a fresh bowler pick
+  }
 
   if(matchWon){
     m.over = true; m.result = 'won';
@@ -830,6 +919,47 @@ function bowlBall(){
 
 function proceedAfterInnings1(){
   render('summary1');
+}
+
+function needsBowlerPick(m){
+  if(!m || m.over) return false;
+  if(m.bowlingTeam !== state.controlledTeamRef) return false;
+  return !m.overBowlerLocked;
+}
+
+function availableBowlersForPick(m){
+  // bowlers who haven't bowled yet this innings - each bowler bowls exactly one over
+  return m.bowlingTeam.players.filter(p => p.bowledBalls === 0);
+}
+
+function pickBowler(playerIdx){
+  const m = state.match;
+  if(!m || !needsBowlerPick(m)) return;
+  m.bowlerIdx = playerIdx;
+  m.overBowlerLocked = true;
+  sfxClick();
+  render();
+}
+
+function availableBattersForPick(m){
+  const bt = m.battingTeam;
+  const ns = bt.players[bt.nonStrikerIdx];
+  return bt.players.filter(p => !p.isOut && p !== ns);
+}
+
+function pickBatter(playerIdx){
+  const m = state.match;
+  if(!m || !m.awaitingBatterPick) return;
+  const bt = m.battingTeam;
+  bt.strikerIdx = playerIdx;
+  bt.nextBatterIdx = Math.max(bt.nextBatterIdx, playerIdx + 1);
+  m.awaitingBatterPick = false;
+  if(m.pendingEndOfOverSwap){
+    [bt.strikerIdx, bt.nonStrikerIdx] = [bt.nonStrikerIdx, bt.strikerIdx];
+    m.pendingEndOfOverSwap = false;
+  }
+  sfxClick();
+  render();
 }
 
 function computeFinal(){
@@ -853,6 +983,8 @@ function render(forceScreen){
   if(state.screen === 'final') return renderFinal();
   if(state.screen === 'squad') return renderSquad();
   if(state.screen === 'leaderboard') return renderLeaderboard();
+  if(state.screen === 'seriesResult') return renderSeriesResult();
+  if(state.screen === 'seriesLeaderboard') return renderSeriesLeaderboard();
 }
 
 function el(html){
@@ -882,9 +1014,14 @@ function renderTitle(){
           <div style="margin-top:6px;"><b>All out:</b> 3 wickets down with a 4-a-side team, last man can't bat alone.</div>
           <div style="margin-top:6px;"><b>Match:</b> 4 overs (24 balls) per innings — each bowler gets exactly one over. Chase the target to win.</div>
         </div>
-        <button class="btn btn-primary" id="startBtn">Start Match 🏏</button>
+        <button class="btn btn-primary" id="startBtn">Toss the coin 🪙</button>
+        <div class="series-btn-row">
+          <button class="btn btn-secondary" id="series3Btn">Best of 3 🏆</button>
+          <button class="btn btn-secondary" id="series5Btn">Best of 5 🏆</button>
+        </div>
         <button class="btn btn-secondary" id="squadBtn">Edit your squad 📋</button>
         <button class="btn btn-secondary" id="leaderboardBtn">Gully leaderboard 🏆</button>
+        <button class="btn btn-secondary" id="seriesLeaderboardBtn">Series leaderboard 🏅</button>
       </main>
       <footer>made for the gully · not for sale · points have no cash value</footer>
     </div>
@@ -896,8 +1033,17 @@ function renderTitle(){
     await newMatch();
     render();
   };
+  document.getElementById('series3Btn').onclick = async ()=>{
+    await startSeries(3);
+    render();
+  };
+  document.getElementById('series5Btn').onclick = async ()=>{
+    await startSeries(5);
+    render();
+  };
   document.getElementById('squadBtn').onclick = ()=>{ state.screen='squad'; render(); };
   document.getElementById('leaderboardBtn').onclick = ()=>{ state.screen='leaderboard'; render(); };
+  document.getElementById('seriesLeaderboardBtn').onclick = ()=>{ state.screen='seriesLeaderboard'; render(); };
 
   (async ()=>{
     const streakResult = await processLoginStreak();
@@ -1262,6 +1408,104 @@ function renderSquad(){
   });
 }
 
+function renderSeriesResult(){
+  const s = state.series;
+  const seriesWinner = s.winsA > s.winsB ? s.teamA : (s.winsB > s.winsA ? s.teamB : null);
+  const wrap = el(`
+    <div>
+      <div class="wall-strip">
+        <div class="brand">SERIES COMPLETE</div>
+        <h1 class="title" style="font-size:24px;">Best of ${s.format} Result</h1>
+      </div>
+      <main>
+        <div class="card center">
+          <div style="display:flex; justify-content:space-between; font-family:'Baloo 2'; font-weight:700; font-size:16px;">
+            <span>${s.teamA.name}</span><span>${s.winsA}</span>
+          </div>
+          <div style="display:flex; justify-content:space-between; font-family:'Baloo 2'; font-weight:700; font-size:16px; margin-top:6px;">
+            <span>${s.teamB.name}</span><span>${s.winsB}</span>
+          </div>
+          ${s.tiedMatches ? `<div class="sub" style="margin-top:6px;">${s.tiedMatches} match${s.tiedMatches>1?'es':''} tied</div>` : ''}
+          <div class="winner-banner">${seriesWinner ? `🏆 ${seriesWinner.name} Win the Series!` : '🤝 Series Tied!'}</div>
+        </div>
+        <div class="card bet-result-card" id="seriesBetResultCard" style="display:none;"></div>
+        <button class="btn btn-primary" id="seriesLeaderboardLink">🏅 View Series Leaderboard</button>
+        <button class="btn btn-secondary" id="seriesBackBtn">Back to Title</button>
+      </main>
+      <footer>gully cricket · house rules</footer>
+    </div>
+  `);
+  app.appendChild(wrap);
+  document.getElementById('seriesLeaderboardLink').onclick = ()=>{ state.screen='seriesLeaderboard'; render(); };
+  document.getElementById('seriesBackBtn').onclick = ()=>{ state.screen='title'; state.series=null; render(); };
+
+  if(!state.seriesRecordSaved){
+    state.seriesRecordSaved = true;
+    (async ()=>{
+      await updateSeriesRecord(s.teamA.name, seriesWinner === s.teamA, !seriesWinner, s.teamA.logoKey);
+      await updateSeriesRecord(s.teamB.name, seriesWinner === s.teamB, !seriesWinner, s.teamB.logoKey);
+
+      if(s.seriesBet){
+        const card = document.getElementById('seriesBetResultCard');
+        const won = seriesWinner === s.seriesBet.teamRef;
+        const tied = !seriesWinner;
+        if(tied) await addPoints(s.seriesBet.stake);
+        else if(won) await addPoints(s.seriesBet.stake * 2);
+        const points = await getPoints();
+        card.style.display = 'block';
+        if(tied){
+          card.className = 'card bet-result-card';
+          card.innerHTML = `🎰 Series tied — your ${s.seriesBet.stake} point stake was refunded.<br><span class="sub">Balance: ${points} points</span>`;
+        } else if(won){
+          card.className = 'card bet-result-card win';
+          card.innerHTML = `🎉 Series bet won! +${s.seriesBet.stake * 2} points<br><span class="sub">Balance: ${points} points</span>`;
+        } else {
+          card.className = 'card bet-result-card lose';
+          card.innerHTML = `😬 Series bet lost — ${s.seriesBet.stake} points gone.<br><span class="sub">Balance: ${points} points</span>`;
+        }
+      }
+    })();
+  }
+}
+
+function renderSeriesLeaderboard(){
+  app.innerHTML = '';
+  app.appendChild(el(`
+    <div>
+      <div class="wall-strip">
+        <div class="brand">SERIES RECORDS</div>
+        <h1 class="title" style="font-size:24px;">Series Leaderboard</h1>
+      </div>
+    </div>
+  `));
+  const loadingMain = el(`<main><div class="card center sub">Loading records...</div></main>`);
+  app.appendChild(loadingMain);
+  getSeriesRecords().then(records=>{
+    app.removeChild(loadingMain);
+    const rowsHTML = records.length === 0
+      ? `<div class="sub center">No series played yet. Try a Best of 3 or Best of 5!</div>`
+      : `<table style="min-width:380px;">
+          <tr><th>#</th><th>Team</th><th class="num">Played</th><th class="num">Won</th><th class="num">Tied</th></tr>
+          ${records.map((r,i)=>`
+            <tr>
+              <td>${i+1}</td>
+              <td class="lb-name">${logoFor(r.logoKey) ? `<img class="avatar-thumb" src="${logoFor(r.logoKey)}">` : ''}${r.name}</td>
+              <td class="num">${r.seriesPlayed}</td>
+              <td class="num">${r.seriesWon}</td>
+              <td class="num">${r.seriesTied||0}</td>
+            </tr>`).join('')}
+        </table>`;
+    const main = el(`
+      <main>
+        <div class="card" style="overflow-x:auto;">${rowsHTML}</div>
+        <button class="btn btn-secondary" id="seriesLbBackBtn">Back</button>
+      </main>
+    `);
+    app.appendChild(main);
+    document.getElementById('seriesLbBackBtn').onclick = ()=>{ state.screen='title'; render(); };
+  });
+}
+
 function renderLeaderboard(){
   app.innerHTML = '';
   app.appendChild(el(`
@@ -1325,6 +1569,7 @@ function renderToss(){
           <div class="vs-badge">VS</div>
           <div class="vs-team">${logoFor(state.bowlingFirst.logoKey) ? `<img class="vs-team-logo" src="${logoFor(state.bowlingFirst.logoKey)}">` : ''}${state.bowlingFirst.name}</div>
         </div>
+        ${state.series ? `<div class="sub" style="margin-top:8px; position:relative; z-index:1;">Match ${state.series.matchIndex+1} of ${state.series.format} — Series: ${state.series.teamA.name} ${state.series.winsA} - ${state.series.winsB} ${state.series.teamB.name}</div>` : ''}
       </div>
       <main>
         <div class="card center" id="tossCard" style="padding:40px 18px;">
@@ -1333,9 +1578,10 @@ function renderToss(){
           </div>
           <div class="sub" style="font-size:16px; margin-top:10px;" id="tossText">Flipping...</div>
         </div>
+        ${(!state.series || state.series.matchIndex === 0) ? `
         <div class="card" id="betCard">
-          <div class="section-label">🎰 Place Your Bet (optional)</div>
-          <div class="sub" style="font-size:11px; margin-bottom:8px;">In-game points only — no cash value, nothing to withdraw.</div>
+          <div class="section-label">🎰 ${state.series ? 'Place Your Series Bet (optional)' : 'Place Your Bet (optional)'}</div>
+          <div class="sub" style="font-size:11px; margin-bottom:8px;">In-game points only — no cash value, nothing to withdraw.${state.series ? ' This bet covers the whole series, not just this match.' : ''}</div>
           <div class="bet-teams">
             <button type="button" class="bet-team-btn" id="betTeamA">${state.battingFirst.name}</button>
             <button type="button" class="bet-team-btn" id="betTeamB">${state.bowlingFirst.name}</button>
@@ -1347,6 +1593,11 @@ function renderToss(){
           <div class="sub" id="betBalanceNote" style="font-size:11px; margin-bottom:10px;">Loading balance...</div>
           <button type="button" class="btn btn-primary" id="placeBetBtn" style="width:100%;" disabled>Tap a team above first</button>
         </div>
+        ` : `
+        <div class="card center">
+          <div class="sub">🎰 Series bet already locked in for this series.</div>
+        </div>
+        `}
       </main>
     </div>
   `);
@@ -1377,53 +1628,57 @@ function renderToss(){
 
   // wire betting immediately - no setTimeout dependency
   const betCard = document.getElementById('betCard');
-  let selectedTeamKey = null;
-  const teamABtn = document.getElementById('betTeamA');
-  const teamBBtn = document.getElementById('betTeamB');
-  const placeBetBtn = document.getElementById('placeBetBtn');
-  const updateBetBtnState = ()=>{
-    placeBetBtn.disabled = !selectedTeamKey;
-    placeBetBtn.textContent = selectedTeamKey ? 'Place Bet' : 'Tap a team above first';
-  };
-  teamABtn.onclick = ()=>{ selectedTeamKey='A'; teamABtn.classList.add('selected'); teamBBtn.classList.remove('selected'); updateBetBtnState(); sfxClick(); };
-  teamBBtn.onclick = ()=>{ selectedTeamKey='B'; teamBBtn.classList.add('selected'); teamABtn.classList.remove('selected'); updateBetBtnState(); sfxClick(); };
-  document.getElementById('betAmountSlider').oninput = (e)=>{
-    document.getElementById('betAmountValue').textContent = e.target.value;
-  };
-  placeBetBtn.onclick = async ()=>{
-    if(!selectedTeamKey) return;
-    const amount = parseInt(document.getElementById('betAmountSlider').value, 10);
-    const bet = await placeBet(selectedTeamKey, amount);
-    if(!bet){
-      document.getElementById('betBalanceNote').textContent = `Bet failed - check your balance.`;
-      return;
-    }
-    state.pendingBet = { teamRef: selectedTeamKey === 'A' ? state.battingFirst : state.bowlingFirst, stake: bet.stake };
-    const points = await getPoints();
-    betCard.innerHTML = `
-      <div class="section-label">🎰 Bet Placed</div>
-      <div class="sub">${bet.stake} points on <b style="color:var(--turmeric)">${state.pendingBet.teamRef.name}</b> to win the match.</div>
-      <div class="sub" style="font-size:11px; margin-top:4px;">Balance: ${points} points</div>
-    `;
-    sfxClick();
-  };
-  getPoints().then(points=>{
-    const balanceNote = document.getElementById('betBalanceNote');
-    if(!balanceNote) return; // bet already placed / card replaced
-    balanceNote.textContent = `Balance: ${points} points`;
-    const slider = document.getElementById('betAmountSlider');
-    if(points < MIN_BET){
-      betCard.innerHTML = `<div class="section-label">🎰 Betting</div><div class="sub">Not enough points to bet right now (need at least ${MIN_BET}). Come back tomorrow for your daily streak bonus!</div>`;
-    } else if(slider){
-      slider.max = Math.max(MIN_BET, Math.min(MAX_BET, points));
-    }
-  });
+  if(betCard){
+    let selectedTeamKey = null;
+    const teamABtn = document.getElementById('betTeamA');
+    const teamBBtn = document.getElementById('betTeamB');
+    const placeBetBtn = document.getElementById('placeBetBtn');
+    const updateBetBtnState = ()=>{
+      placeBetBtn.disabled = !selectedTeamKey;
+      placeBetBtn.textContent = selectedTeamKey ? 'Place Bet' : 'Tap a team above first';
+    };
+    teamABtn.onclick = ()=>{ selectedTeamKey='A'; teamABtn.classList.add('selected'); teamBBtn.classList.remove('selected'); updateBetBtnState(); sfxClick(); };
+    teamBBtn.onclick = ()=>{ selectedTeamKey='B'; teamBBtn.classList.add('selected'); teamABtn.classList.remove('selected'); updateBetBtnState(); sfxClick(); };
+    document.getElementById('betAmountSlider').oninput = (e)=>{
+      document.getElementById('betAmountValue').textContent = e.target.value;
+    };
+    placeBetBtn.onclick = async ()=>{
+      if(!selectedTeamKey) return;
+      const amount = parseInt(document.getElementById('betAmountSlider').value, 10);
+      const bet = await placeBet(selectedTeamKey, amount);
+      if(!bet){
+        document.getElementById('betBalanceNote').textContent = `Bet failed - check your balance.`;
+        return;
+      }
+      const placedBet = { teamRef: selectedTeamKey === 'A' ? state.battingFirst : state.bowlingFirst, stake: bet.stake };
+      if(state.series){ state.series.seriesBet = placedBet; state.controlledTeamRef = placedBet.teamRef; }
+      else { state.pendingBet = placedBet; state.controlledTeamRef = placedBet.teamRef; }
+      const points = await getPoints();
+      betCard.innerHTML = `
+        <div class="section-label">🎰 Bet Placed</div>
+        <div class="sub">${bet.stake} points on <b style="color:var(--turmeric)">${placedBet.teamRef.name}</b> to win the ${state.series ? 'series' : 'match'}.</div>
+        <div class="sub" style="font-size:11px; margin-top:4px;">Balance: ${points} points</div>
+      `;
+      sfxClick();
+    };
+    getPoints().then(points=>{
+      const balanceNote = document.getElementById('betBalanceNote');
+      if(!balanceNote) return; // bet already placed / card replaced
+      balanceNote.textContent = `Balance: ${points} points`;
+      const slider = document.getElementById('betAmountSlider');
+      if(points < MIN_BET){
+        betCard.innerHTML = `<div class="section-label">🎰 Betting</div><div class="sub">Not enough points to bet right now (need at least ${MIN_BET}). Come back tomorrow for your daily streak bonus!</div>`;
+      } else if(slider){
+        slider.max = Math.max(MIN_BET, Math.min(MAX_BET, points));
+      }
+    });
+  }
 
   // toss reveal + Start Innings button, unchanged timing (just visual pacing)
   setTimeout(()=>{
     document.getElementById('tossText').innerHTML =
       `<b style="color:var(--turmeric)">${state.battingFirst.name}</b> won the toss and will bat first!`;
-    const btn = el(`<button class="btn btn-primary" style="margin-top:18px; width:100%;">Start Innings 1</button>`);
+    const btn = el(`<button class="btn btn-primary" style="margin-top:18px; width:100%;">${state.series ? `Start Match ${state.series.matchIndex+1}` : 'Start Innings 1'}</button>`);
     btn.onclick = ()=>{ startInnings1(); render(); };
     document.getElementById('tossCard').appendChild(btn);
   }, 900);
@@ -1467,7 +1722,6 @@ function renderPlay(){
     } else if(state.lastRuns === 10){
       strikerAnim = 'anim-big-swing';
       bowlerAnim = 'anim-bowl anim-stunned';
-      ballTravelClass += ' fly-rocket-seq fly-rocket';
     } else if(state.lastRuns === 6){
       strikerAnim = 'anim-big-swing';
       ballTravelClass += ' fly-six';
@@ -1508,15 +1762,15 @@ function renderPlay(){
             <div class="lane compact">
               <div class="player-mini">
                 <span class="avatar-wrap ${bowlerAnim}">${avatarForPlayer(bowler.name, bowler.avatarKey, 'bowl') ? `<img class="avatar-mini" src="${avatarForPlayer(bowler.name, bowler.avatarKey, 'bowl')}">` : '🤾'}</span>
-                <span>${bowler.name}</span><small>Econ ${bowler.bowledBalls > 0 ? (bowler.runsConceded/(bowler.bowledBalls/6)).toFixed(1) : '-'}</small>
+                <span>${bowler.name}</span><small>bowling</small>
               </div>
               <div class="player-mini">
                 <span class="avatar-wrap ${runnerAnim}">${avatarForPlayer(ns.name, ns.avatarKey) ? `<img class="avatar-mini" src="${avatarForPlayer(ns.name, ns.avatarKey)}">` : '🏏'}</span>
-                <span>${ns.name}</span><small>${ns.runs} (${ns.ballsFaced}) SR ${ns.ballsFaced > 0 ? ((ns.runs/ns.ballsFaced)*100).toFixed(1) : '-'}</small>
+                <span>${ns.name}</span><small>${ns.runs} (${ns.ballsFaced})</small>
               </div>
               <div class="player-mini striker">
                 <span class="avatar-wrap ${strikerAnim} ${runnerAnim}">${avatarForPlayer(s.name, s.avatarKey) ? `<img class="avatar-mini" src="${avatarForPlayer(s.name, s.avatarKey)}">` : '🏏'}</span>
-                <span>${s.name} *</span><small>${s.runs} (${s.ballsFaced}) SR ${s.ballsFaced > 0 ? ((s.runs/s.ballsFaced)*100).toFixed(1) : '-'}</small>
+                <span>${s.name} *</span><small>${s.runs} (${s.ballsFaced})</small>
               </div>
               ${ballTravelClass ? `<div class="${ballTravelClass}">${state.lastRuns === 10 ? '<img class="fireball-mini" src="assets/fireball.png">' : '🔴'}</div>` : ''}
             </div>
@@ -1527,7 +1781,33 @@ function renderPlay(){
           ` : `<div class="ball-msg sub">Ready at the crease...</div>`}
         </div>
 
-        ${m.over ? renderInningsOverPanel() : `<button class="btn btn-primary" id="bowlBtn">Bowl the next ball 🏏</button>`}
+        ${m.over ? renderInningsOverPanel() : (
+          needsBowlerPick(m) ? `
+            <div class="card" id="pickerCard">
+              <div class="section-label">🎯 Choose your bowler</div>
+              <div class="picker-grid">
+                ${availableBowlersForPick(m).map(p => `
+                  <button type="button" class="picker-option" data-idx="${m.bowlingTeam.players.indexOf(p)}">
+                    ${avatarForPlayer(p.name, p.avatarKey, 'bowl') ? `<img class="avatar-mini" src="${avatarForPlayer(p.name, p.avatarKey, 'bowl')}">` : '🤾'}
+                    <span>${p.name}</span>
+                  </button>
+                `).join('')}
+              </div>
+            </div>
+          ` : m.awaitingBatterPick ? `
+            <div class="card" id="pickerCard">
+              <div class="section-label">🏏 Choose your next batter</div>
+              <div class="picker-grid">
+                ${availableBattersForPick(m).map(p => `
+                  <button type="button" class="picker-option" data-idx="${m.battingTeam.players.indexOf(p)}">
+                    ${avatarForPlayer(p.name, p.avatarKey) ? `<img class="avatar-mini" src="${avatarForPlayer(p.name, p.avatarKey)}">` : '🏏'}
+                    <span>${p.name}</span>
+                  </button>
+                `).join('')}
+              </div>
+            </div>
+          ` : `<button class="btn btn-primary" id="bowlBtn">Bowl the next ball 🏏</button>`
+        )}
 
         <div class="card">
           <div class="section-label">Batting</div>
@@ -1561,6 +1841,13 @@ function renderPlay(){
   app.appendChild(wrap);
   const bowlBtn = document.getElementById('bowlBtn');
   if(bowlBtn) bowlBtn.onclick = bowlBall;
+  document.querySelectorAll('.picker-option').forEach(btn=>{
+    btn.onclick = ()=>{
+      const idx = parseInt(btn.dataset.idx, 10);
+      if(needsBowlerPick(m)) pickBowler(idx);
+      else if(m.awaitingBatterPick) pickBatter(idx);
+    };
+  });
 }
 
 function renderInningsOverPanel(){
@@ -1638,10 +1925,31 @@ function teamCardHTML(team, showBatting){
 function renderFinal(){
   const {winner, motm} = computeFinal();
   const a = state.battingFirst, b = state.bowlingFirst;
+
+  // series bookkeeping: record this match's result against the series tally,
+  // exactly once per match
+  if(state.series && !state.seriesMatchRecorded){
+    state.seriesMatchRecorded = true;
+    const s = state.series;
+    if(winner === s.teamA) s.winsA += 1;
+    else if(winner === s.teamB) s.winsB += 1;
+    else s.tiedMatches += 1;
+  }
+
+  const seriesTallyHTML = state.series
+    ? `<div class="sub center" style="margin-top:6px;">Series: ${state.series.teamA.name} ${state.series.winsA} - ${state.series.winsB} ${state.series.teamB.name}${state.series.tiedMatches ? ` (${state.series.tiedMatches} tied)` : ''}</div>`
+    : '';
+  const isLastMatchInSeries = state.series && (state.series.matchIndex + 1 >= state.series.format);
+  const nextActionBtnHTML = state.series
+    ? (isLastMatchInSeries
+        ? `<button class="btn btn-primary" id="seriesResultBtn">🏆 See Series Result</button>`
+        : `<button class="btn btn-primary" id="nextMatchBtn">Next Match ▶️</button>`)
+    : `<button class="btn btn-secondary" id="replayBtn">Play again</button>`;
+
   const wrap = el(`
     <div>
       <div class="wall-strip">
-        <div class="brand">FULL & FINAL</div>
+        <div class="brand">${state.series ? `MATCH ${state.series.matchIndex+1} OF ${state.series.format}` : 'FULL & FINAL'}</div>
         <h1 class="title" style="font-size:24px;">Match Result</h1>
       </div>
       <main>
@@ -1653,23 +1961,40 @@ function renderFinal(){
             <span>${b.name}</span><span>${b.score}/${b.wickets}</span>
           </div>
           <div class="winner-banner">${winner ? `🏆 ${winner.name} Win!` : "🤝 Match Tied!"}</div>
+          ${seriesTallyHTML}
           ${motm ? `<div class="motm">${avatarForPlayer(motm.name, motm.avatarKey) ? `<img class="avatar-card" src="${avatarForPlayer(motm.name, motm.avatarKey)}">` : ''}⭐ Man of the Match: <b>${motm.name}</b> (${motm.points} pts)</div>` : ''}
           <div class="sub" id="statsSaveMsg" style="margin-top:8px; font-size:11px;">Saving career stats...</div>
         </div>
-        <div class="card bet-result-card" id="betResultCard" style="display:none;"></div>
+        ${state.series ? '' : `<div class="card bet-result-card" id="betResultCard" style="display:none;"></div>`}
         ${teamCardHTML(a)}
         ${teamCardHTML(b)}
         <button class="btn btn-primary" id="statsBtn">📊 View Player Stats</button>
-        <button class="btn btn-secondary" id="replayBtn">Play again</button>
+        ${nextActionBtnHTML}
       </main>
       <footer>gully cricket · house rules</footer>
     </div>
   `);
   app.appendChild(wrap);
   document.getElementById('statsBtn').onclick = ()=>{ state.screen='leaderboard'; render(); };
-  document.getElementById('replayBtn').onclick = async ()=>{ await newMatch(); render(); };
 
-  if(!state.betResolvedForThisMatch){
+  if(state.series){
+    if(isLastMatchInSeries){
+      document.getElementById('seriesResultBtn').onclick = ()=>{ state.screen='seriesResult'; render(); };
+    } else {
+      document.getElementById('nextMatchBtn').onclick = ()=>{
+        state.series.matchIndex += 1;
+        state.seriesMatchRecorded = false;
+        startSeriesMatch();
+        render();
+      };
+    }
+  } else {
+    document.getElementById('replayBtn').onclick = async ()=>{ await newMatch(); render(); };
+  }
+
+  // per-match betting only applies to standalone (non-series) matches -
+  // series bets are resolved once, on the series result screen
+  if(!state.series && !state.betResolvedForThisMatch){
     state.betResolvedForThisMatch = true;
     if(state.pendingBet){
       const won = winner === state.pendingBet.teamRef;
@@ -1729,37 +2054,4 @@ Promise.all([loadMusicPref(), loadMusicVolume()]).then(()=>{
     document.getElementById('musicVolumeValue').textContent = Math.round(musicVolume*100) + '%';
   }
 });
-showWelcome();
 render();
-// -------- WELCOME POPUP (First-time players) --------
-function showWelcome() {
-  if (localStorage.getItem('gully:welcomeShown')) return;
-  const overlay = document.createElement('div');
-  overlay.id = 'welcomeOverlay';
-  overlay.style.cssText = `
-    position:fixed; top:0; left:0; right:0; bottom:0;
-    background:rgba(0,0,0,0.85); z-index:999;
-    display:flex; align-items:center; justify-content:center;
-  `;
-  overlay.innerHTML = `
-    <div style="background:#211d1a; padding:2rem; border-radius:16px; max-width:400px; text-align:center; color:white; border:1px solid #D9A441;">
-      <h2 style="color:#D9A441; margin-top:0;">🏏 Gully Cricket</h2>
-      <p style="margin:1rem 0; line-height:1.6;">
-        Tap <strong>"Start Match"</strong> to begin.<br>
-        Earn points for runs, wickets &amp; wins!
-      </p>
-      <p style="font-size:0.9rem; opacity:0.7;">
-        💰 Points unlock bats, players &amp; balls in the shop.
-      </p>
-      <button id="closeWelcomeBtn" style="margin-top:1.5rem; background:#D9A441; color:#1e4568; border:none; padding:10px 28px; border-radius:8px; font-weight:bold; font-size:1rem; cursor:pointer;">
-        Got it! 👊
-      </button>
-    </div>
-  `;
-  document.body.appendChild(overlay);
-  document.getElementById('closeWelcomeBtn').onclick = function() {
-    overlay.remove();
-    localStorage.setItem('gully:welcomeShown', 'true');
-    sfxClick();
-  };
-}
