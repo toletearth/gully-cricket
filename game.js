@@ -795,6 +795,7 @@ function startInnings1(){
     target: null,
     over: false, result: null,
     overBowlerLocked: false, awaitingBatterPick: false, pendingEndOfOverSwap: false,
+    awaitingOpenersPick: bt === state.controlledTeamRef, openerStrikerPicked: null,
   };
   bt.strikerIdx = 0; bt.nonStrikerIdx = 1; bt.nextBatterIdx = 2;
   state.screen = 'play';
@@ -813,6 +814,7 @@ function startInnings2(){
     target: state.battingFirst.score,
     over: false, result: null,
     overBowlerLocked: false, awaitingBatterPick: false, pendingEndOfOverSwap: false,
+    awaitingOpenersPick: bt === state.controlledTeamRef, openerStrikerPicked: null,
   };
   state.innings = 2;
   state.screen = 'play';
@@ -960,6 +962,26 @@ function pickBatter(playerIdx){
   }
   sfxClick();
   render();
+}
+
+function pickOpener(playerIdx){
+  const m = state.match;
+  if(!m || !m.awaitingOpenersPick) return;
+  const bt = m.battingTeam;
+  if(m.openerStrikerPicked === null){
+    // step 1: choose who's on strike
+    m.openerStrikerPicked = playerIdx;
+    sfxClick();
+    render();
+  } else {
+    // step 2: choose the non-striker from whoever's left
+    bt.strikerIdx = m.openerStrikerPicked;
+    bt.nonStrikerIdx = playerIdx;
+    m.awaitingOpenersPick = false;
+    m.openerStrikerPicked = null;
+    sfxClick();
+    render();
+  }
 }
 
 function computeFinal(){
@@ -1480,9 +1502,10 @@ function renderSeriesLeaderboard(){
   `));
   const loadingMain = el(`<main><div class="card center sub">Loading records...</div></main>`);
   app.appendChild(loadingMain);
-  getSeriesRecords().then(records=>{
+  Promise.all([getSeriesRecords(), loadLeaderboard()]).then(([records, players])=>{
     app.removeChild(loadingMain);
-    const rowsHTML = records.length === 0
+
+    const teamRowsHTML = records.length === 0
       ? `<div class="sub center">No series played yet. Try a Best of 3 or Best of 5!</div>`
       : `<table style="min-width:380px;">
           <tr><th>#</th><th>Team</th><th class="num">Played</th><th class="num">Won</th><th class="num">Tied</th></tr>
@@ -1495,14 +1518,46 @@ function renderSeriesLeaderboard(){
               <td class="num">${r.seriesTied||0}</td>
             </tr>`).join('')}
         </table>`;
+
+    const playerRowsHTML = players.length === 0
+      ? `<div class="sub center">No player stats yet.</div>`
+      : `<table style="min-width:680px;">
+          <tr><th>#</th><th>Player</th><th class="num">M</th><th class="num">Runs</th><th class="num">SR</th><th class="num">Wkts</th><th class="num">Econ</th><th class="num">6s</th><th class="num">4s</th><th class="num">10s</th><th class="num">Pts</th></tr>
+          ${players.map((p,i)=>{
+            const balls = p.ballsFaced||0;
+            const strikeRate = balls > 0 ? ((p.runs/balls)*100).toFixed(1) : '-';
+            const overs = (p.bowledBalls||0)/6;
+            const economy = overs > 0 ? (p.runsConceded/overs).toFixed(1) : '-';
+            return `
+            <tr>
+              <td>${i+1}</td>
+              <td class="lb-name">
+                ${avatarForPlayer(p.name, p.avatarKey) ? `<img class="avatar-thumb" src="${avatarForPlayer(p.name, p.avatarKey)}">` : ''}
+                ${p.name}${p.motm ? ` <span style="color:var(--turmeric)">★${p.motm}</span>` : ''}
+              </td>
+              <td class="num">${p.matches}</td>
+              <td class="num">${p.runs}</td>
+              <td class="num">${strikeRate}</td>
+              <td class="num">${p.wickets}</td>
+              <td class="num">${economy}</td>
+              <td class="num">${p.sixes||0}</td>
+              <td class="num">${p.fours||0}</td>
+              <td class="num">${p.tens||0}</td>
+              <td class="num">${p.points}</td>
+            </tr>`;}).join('')}
+        </table>`;
+
     const main = el(`
       <main>
-        <div class="card" style="overflow-x:auto;">${rowsHTML}</div>
+        <div class="section-label">Team Series Records</div>
+        <div class="card" style="overflow-x:auto;">${teamRowsHTML}</div>
+        <div class="section-label" style="margin-top:6px;">Player Stats</div>
+        <div class="card" style="overflow-x:auto;">${playerRowsHTML}</div>
         <button class="btn btn-secondary" id="seriesLbBackBtn">Back</button>
       </main>
     `);
     app.appendChild(main);
-    document.getElementById('seriesLbBackBtn').onclick = ()=>{ state.screen='title'; render(); };
+    document.getElementById('seriesLbBackBtn').onclick = ()=>{ state.screen = state.returnScreen || 'title'; render(); };
   });
 }
 
@@ -1554,7 +1609,7 @@ function renderLeaderboard(){
       </main>
     `);
     app.appendChild(main);
-    document.getElementById('backBtn2').onclick = ()=>{ state.screen='title'; render(); };
+    document.getElementById('backBtn2').onclick = ()=>{ state.screen = state.returnScreen || 'title'; render(); };
   });
 }
 
@@ -1782,7 +1837,19 @@ function renderPlay(){
         </div>
 
         ${m.over ? renderInningsOverPanel() : (
-          needsBowlerPick(m) ? `
+          m.awaitingOpenersPick ? `
+            <div class="card" id="pickerCard">
+              <div class="section-label">🏏 ${m.openerStrikerPicked === null ? 'Choose your striker (opens the batting)' : 'Choose your non-striker'}</div>
+              <div class="picker-grid">
+                ${m.battingTeam.players.filter((p,i) => m.openerStrikerPicked === null || i !== m.openerStrikerPicked).map(p => `
+                  <button type="button" class="picker-option" data-idx="${m.battingTeam.players.indexOf(p)}">
+                    ${avatarForPlayer(p.name, p.avatarKey) ? `<img class="avatar-mini" src="${avatarForPlayer(p.name, p.avatarKey)}">` : '🏏'}
+                    <span>${p.name}</span>
+                  </button>
+                `).join('')}
+              </div>
+            </div>
+          ` : needsBowlerPick(m) ? `
             <div class="card" id="pickerCard">
               <div class="section-label">🎯 Choose your bowler</div>
               <div class="picker-grid">
@@ -1844,7 +1911,8 @@ function renderPlay(){
   document.querySelectorAll('.picker-option').forEach(btn=>{
     btn.onclick = ()=>{
       const idx = parseInt(btn.dataset.idx, 10);
-      if(needsBowlerPick(m)) pickBowler(idx);
+      if(m.awaitingOpenersPick) pickOpener(idx);
+      else if(needsBowlerPick(m)) pickBowler(idx);
       else if(m.awaitingBatterPick) pickBatter(idx);
     };
   });
@@ -1975,7 +2043,7 @@ function renderFinal(){
     </div>
   `);
   app.appendChild(wrap);
-  document.getElementById('statsBtn').onclick = ()=>{ state.screen='leaderboard'; render(); };
+  document.getElementById('statsBtn').onclick = ()=>{ state.returnScreen = state.screen; state.screen='leaderboard'; render(); };
 
   if(state.series){
     if(isLastMatchInSeries){
