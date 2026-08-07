@@ -2123,3 +2123,35 @@ Promise.all([loadMusicPref(), loadMusicVolume()]).then(()=>{
   }
 });
 render();
+// -------- WELCOME POPUP (First-time players) --------
+function showWelcome() {
+  if (localStorage.getItem('gully:welcomeShown')) return;
+  const overlay = document.createElement('div');
+  overlay.id = 'welcomeOverlay';
+  overlay.style.cssText = `
+    position:fixed; top:0; left:0; right:0; bottom:0;
+    background:rgba(0,0,0,0.85); z-index:999;
+    display:flex; align-items:center; justify-content:center;
+  `;
+  overlay.innerHTML = `
+    <div style="background:#211d1a; padding:2rem; border-radius:16px; max-width:400px; text-align:center; color:white; border:1px solid #D9A441;">
+      <h2 style="color:#D9A441; margin-top:0;">🏏 Gully Cricket</h2>
+      <p style="margin:1rem 0; line-height:1.6;">
+        Tap <strong>"Start Match"</strong> to begin.<br>
+        Earn points for runs, wickets &amp; wins!
+      </p>
+      <p style="font-size:0.9rem; opacity:0.7;">
+        💰 Points unlock bats, players &amp; balls in the shop.
+      </p>
+      <button id="closeWelcomeBtn" style="margin-top:1.5rem; background:#D9A441; color:#1e4568; border:none; padding:10px 28px; border-radius:8px; font-weight:bold; font-size:1rem; cursor:pointer;">
+        Got it! 👊
+      </button>
+    </div>
+  `;
+  document.body.appendChild(overlay);
+  document.getElementById('closeWelcomeBtn').onclick = function() {
+    overlay.remove();
+    localStorage.setItem('gully:welcomeShown', 'true');
+    sfxClick();
+  };
+}
